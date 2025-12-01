@@ -1,6 +1,6 @@
 import textwrap
 from openai import OpenAI
-from store_agent import run_agent
+from agent import run_agent
 from erc3 import ERC3
 
 client = OpenAI()
