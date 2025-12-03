@@ -19,7 +19,15 @@ class Req_ListMyProjects(BaseModel):
     user: dev.EmployeeID
 
 class Resp_ListMyProjects(BaseModel):
-    projects: List[ProjectDetail]
+    lead_in: List[ProjectDetail]
+    member_of: List[ProjectDetail]
+
+class Req_ListMyCustomers(BaseModel):
+    tool: Literal["/mycustomers"] = "/mycustomers"
+    user: dev.EmployeeID
+
+class Resp_ListMyCustomers(BaseModel):
+    customers: List[dev.CompanyDetail]
 
 # next-step planner
 class NextStep(BaseModel):
@@ -33,25 +41,26 @@ class NextStep(BaseModel):
     function: Union[
         dev.Req_ProvideAgentResponse,
         dev.Req_ListProjects,
-        dev.Req_ListEmployees,
-        dev.Req_ListCustomers,
-        dev.Req_GetCustomer,
-        dev.Req_GetEmployee,
-        dev.Req_GetProject,
-        dev.Req_GetTimeEntry,
         dev.Req_SearchProjects,
-        dev.Req_SearchEmployees,
-        dev.Req_LogTimeEntry,
-        dev.Req_SearchTimeEntries,
-        dev.Req_SearchCustomers,
-        dev.Req_UpdateTimeEntry,
+        Req_ListMyProjects,
+        dev.Req_GetProject,
         dev.Req_UpdateProjectTeam,
         dev.Req_UpdateProjectStatus,
+        dev.Req_ListEmployees,
+        dev.Req_SearchEmployees,
+        dev.Req_GetEmployee,
         dev.Req_UpdateEmployeeInfo,
+        dev.Req_ListCustomers,
+        Req_ListMyCustomers,
+        dev.Req_GetCustomer,
+        dev.Req_SearchCustomers,
+        dev.Req_SearchTimeEntries,
         dev.Req_TimeSummaryByProject,
         dev.Req_TimeSummaryByEmployee,
+        dev.Req_GetTimeEntry,
+        dev.Req_LogTimeEntry,
+        dev.Req_UpdateTimeEntry,
         Req_DeleteWikiPage,
-        Req_ListMyProjects,
     ] = Field(..., description="execute first remaining step")
 
 CLI_RED = "\x1B[31m"
@@ -63,33 +72,52 @@ CLI_CLR = "\x1B[0m"
 def list_my_projects(api: Erc3Client, user: str) -> Resp_ListMyProjects:
     page_limit = 32
     next_offset = 0
-    loaded = []
+    lead_in = []
+    member_of = []
     while True:
         try:
             prjs = api.search_projects(offset=next_offset, limit=page_limit, include_archived=True, team=dict(employee_id=user))
 
-            if prjs.projects:
+            for p in prjs.projects or []:
+                detail = api.get_project(p.id).project
+                role = [t for t in detail.team if t.employee == user][0].role
 
-                for p in prjs.projects:
-                    real = api.get_project(p.id)
-                    if real.project:
-                        loaded.append(real.project)
+                if role == "Lead":
+                    lead_in.append(detail)
+                else:
+                    member_of.append(detail)
 
             next_offset = prjs.next_offset
             if next_offset == -1:
-                return Resp_ListMyProjects(projects=loaded)
+                return Resp_ListMyProjects(lead_in=lead_in, member_of=member_of)
         except ApiException as e:
+            if "page limit exceeded" in str(e):
+                page_limit /= 2
+                if page_limit <= 2:
+                    raise
+def list_my_customers(api: Erc3Client, user: str) -> Resp_ListMyCustomers:
+    page_limit = 32
+    next_offset = 0
+    loaded = []
+    while True:
+        try:
+            custs = api.search_customers(offset=next_offset, limit=page_limit, account_managers=[user])
 
+            for p in custs.companies or []:
+                loaded.append(api.get_customer(p.id).company)
+
+            next_offset = custs.next_offset
+            if next_offset == -1:
+                return Resp_ListMyCustomers(customers=loaded)
+        except ApiException as e:
             if "page limit exceeded" in str(e):
                 page_limit /= 2
                 if page_limit <= 2:
                     raise
 
-
 # Tool do automatically distill wiki rules
-def distill_rules(api: Erc3Client, llm: MyLLM) -> str:
+def distill_rules(api: Erc3Client, llm: MyLLM, about: dev.Resp_WhoAmI) -> str:
 
-    about = api.who_am_i()
     context_id = about.wiki_sha1
 
     loc = Path(f"context_{context_id}.json")
@@ -133,12 +161,12 @@ Rules must be compact RFC-style, ok to use pseudo code for compactness. They wil
 
 Use available tools to execute task from the current user.
 
-To confirm project access - get or find project (and get after finding)
-When updating entry - fill all fields to keep with old values from being erased
-Archival of entries or wiki deletion are not irreversible operations.
-Respond with proper Req_ProvideAgentResponse when:
-- Task is done
-- Task can't be completed (e.g. internal error, user is not allowed or clarification is needed)
+- To confirm project access - get or find project (and get after finding)
+- Archival of entries or wiki deletion are not irreversible operations.
+- Respond with proper Req_ProvideAgentResponse when:
+    - Task is done
+    - Task can't be completed (e.g. internal error, user is not allowed or clarification is needed)
+- Make sure to always include links to relevant entities in response.
 
 # Rules
 """
@@ -167,7 +195,7 @@ Respond with proper Req_ProvideAgentResponse when:
     return prompt
 
 
-def my_dispatch(client: Erc3Client, cmd: BaseModel):
+def my_dispatch(client: Erc3Client, cmd: BaseModel, about: dev.Resp_WhoAmI):
     # example how to add custom tools or tool handling
     if isinstance(cmd, dev.Req_UpdateEmployeeInfo):
         # first pull
@@ -181,27 +209,34 @@ def my_dispatch(client: Erc3Client, cmd: BaseModel):
         cmd.department = cmd.department or cur.department
         return client.dispatch(cmd)
 
-
     if isinstance(cmd, Req_DeleteWikiPage):
         return client.dispatch(dev.Req_UpdateWiki(content="", changed_by=cmd.changed_by, file=cmd.file))
 
     if isinstance(cmd, Req_ListMyProjects):
         return list_my_projects(client, cmd.user)
 
+    if isinstance(cmd, Req_ListMyCustomers):
+        return list_my_customers(client, cmd.user)
+
+    if isinstance(cmd, dev.Req_ProvideAgentResponse):
+        # drop link to current user
+        cmd.links = [l for l in cmd.links if l.id != about.current_user]
+        return client.dispatch(cmd)
+
     return client.dispatch(cmd)
 
 def run_agent(model: str, api: ERC3, task: TaskInfo):
-
     erc_client = api.get_erc_client(task)
+    about = erc_client.who_am_i()
     llm = MyLLM(api=api, model=model, task=task, max_tokens=32768)
 
-    system_prompt = distill_rules(erc_client, llm)
+    system_prompt = distill_rules(erc_client, llm, about)
 
     reason = Literal["security_violation", "request_not_supported_by_api", "more_information_needed", "may_pass"]
 
     class RequestPreflightCheck(BaseModel):
-        current_actor: str = Field(...)
-        preflight_check_explanation_brief: Optional[str] = Field(...)
+        current_actor: str
+        preflight_check_explanation_brief: Optional[str]
         denial_reason: reason
         outcome_confidence_1_to_5: Annotated[int, Gt(0), Lt(6)]
         answer_requires_listing_actors_projects: bool
@@ -213,9 +248,10 @@ def run_agent(model: str, api: ERC3, task: TaskInfo):
     ]
 
     preflight_check = llm.query(log, RequestPreflightCheck)
+    confidence = preflight_check.outcome_confidence_1_to_5
 
-    if preflight_check.outcome_confidence_1_to_5 >=4:
-        print("PREFLIGHT: "+preflight_check.preflight_check_explanation_brief)
+    if confidence >=4:
+        print(f"PREFLIGHT {confidence}: {preflight_check.preflight_check_explanation_brief}")
         if preflight_check.denial_reason == "request_not_supported_by_api":
             erc_client.provide_agent_response("Not supported", outcome="none_unsupported")
             return
@@ -249,7 +285,7 @@ def run_agent(model: str, api: ERC3, task: TaskInfo):
 
         # now execute the tool by dispatching command to our handler
         try:
-            result = my_dispatch(erc_client, job.function)
+            result = my_dispatch(erc_client, job.function,about)
             txt = result.model_dump_json(exclude_none=True, exclude_unset=True)
             print(f"{CLI_GREEN}OUT{CLI_CLR}: {txt}")
             txt = "DONE: " + txt
