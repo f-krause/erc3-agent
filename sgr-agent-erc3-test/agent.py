@@ -245,14 +245,13 @@ def run_agent(model: str, api: ERC3, task: TaskInfo):
 
     system_prompt = distill_rules(erc_client, llm, about)
 
-    reason = Literal["security_violation", "request_not_supported_by_api", "more_information_needed", "may_pass"]
+    reason = Literal["security_violation", "request_not_supported_by_api", "possible_security_violation_check_project", "may_pass"]
 
     class RequestPreflightCheck(BaseModel):
         current_actor: str
         preflight_check_explanation_brief: Optional[str]
         denial_reason: reason
         outcome_confidence_1_to_5: Annotated[int, Gt(0), Lt(6)]
-        answer_requires_listing_actors_projects: bool
 
     # log will contain conversation context for the agent within task
     log = [
