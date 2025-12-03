@@ -46,7 +46,7 @@ class NextStep(BaseModel):
     task_completed: bool
     # Routing to one of the tools to execute the first remaining step
     # if task is completed, model will pick ReportTaskCompletion
-    function: Union[
+    first_step_from_plan: Union[
         dev.Req_ProvideAgentResponse,
         dev.Req_ListProjects,
         dev.Req_SearchProjects,
@@ -69,7 +69,7 @@ class NextStep(BaseModel):
         CreateTimesheetEntryForUser,
         dev.Req_UpdateTimeEntry,
         Req_DeleteWikiPage,
-    ] = Field(..., description="execute first remaining step")
+    ] = Field(..., description="first step from plan above")
 
 CLI_RED = "\x1B[31m"
 CLI_GREEN = "\x1B[32m"
@@ -179,7 +179,8 @@ Use available tools to execute task from the current user.
 - Respond with proper Req_ProvideAgentResponse when:
     - Task is done
     - Task can't be completed (e.g. internal error, user is not allowed or clarification is needed)
-- Make sure to always include links to relevant entities in response.
+- Make sure to always include ids of referenced entities in response links.
+- if user might have access to a resource - double-chech that BEFORE denying
 
 # Rules
 """
@@ -281,7 +282,7 @@ def run_agent(model: str, api: ERC3, task: TaskInfo):
         job = llm.query(log, NextStep)
 
           # print next sep for debugging
-        print(job.plan_remaining_steps_brief[0], f"\n  {job.function}")
+        print(job.plan_remaining_steps_brief[0], f"\n  {job.first_step_from_plan}")
 
         # Let's add tool request to conversation history as if OpenAI asked for it.
         # a shorter way would be to just append `job.model_dump_json()` entirely
@@ -292,14 +293,14 @@ def run_agent(model: str, api: ERC3, task: TaskInfo):
                 "type": "function",
                 "id": step,
                 "function": {
-                    "name": job.function.__class__.__name__,
-                    "arguments": job.function.model_dump_json(),
+                    "name": job.first_step_from_plan.__class__.__name__,
+                    "arguments": job.first_step_from_plan.model_dump_json(),
                 }}]
         })
 
         # now execute the tool by dispatching command to our handler
         try:
-            result = my_dispatch(erc_client, job.function,about)
+            result = my_dispatch(erc_client, job.first_step_from_plan, about)
             txt = result.model_dump_json(exclude_none=True, exclude_unset=True)
             print(f"{CLI_GREEN}OUT{CLI_CLR}: {txt}")
             txt = "DONE: " + txt
@@ -311,10 +312,10 @@ def run_agent(model: str, api: ERC3, task: TaskInfo):
             txt = "ERROR: " + txt
 
             # if SGR wants to finish, then quit loop
-        if isinstance(job.function, dev.Req_ProvideAgentResponse):
-            print(f"{CLI_BLUE}agent {job.function.outcome}{CLI_CLR}. Summary:\n{job.function.message}")
+        if isinstance(job.first_step_from_plan, dev.Req_ProvideAgentResponse):
+            print(f"{CLI_BLUE}agent {job.first_step_from_plan.outcome}{CLI_CLR}. Summary:\n{job.first_step_from_plan.message}")
 
-            for link in job.function.links:
+            for link in job.first_step_from_plan.links:
                 print(f"  - link {link.kind}: {link.id}")
             break
 
