@@ -137,6 +137,28 @@ When task is done or can't be done - Req_ProvideAgentResponse.
     return prompt
 
 
+def my_dispatch(client: Erc3Client, cmd: BaseModel):
+
+    if isinstance(cmd, dev.Req_UpdateEmployeeInfo):
+        # first pull
+        cur = client.get_employee(cmd.employee).employee
+
+        cmd.notes = cmd.notes or cur.notes
+        cmd.salary = cmd.salary or cur.salary
+        cmd.wills = cmd.wills or cur.wills
+        cmd.skills = cmd.skills or cur.skills
+        cmd.location = cmd.location or cur.location
+        cmd.department = cmd.department or cur.department
+        return client.dispatch(cmd)
+
+    return client.dispatch(cmd)
+
+
+
+
+
+
+
 
 def run_agent(model: str, api: ERC3, task: TaskInfo):
 
@@ -194,7 +216,7 @@ def run_agent(model: str, api: ERC3, task: TaskInfo):
 
         # now execute the tool by dispatching command to our handler
         try:
-            result = erc_client.dispatch(job.function)
+            result = my_dispatch(erc_client, job.function)
             txt = result.model_dump_json(exclude_none=True, exclude_unset=True)
             print(f"{CLI_GREEN}OUT{CLI_CLR}: {txt}")
             txt = "DONE: " + txt
