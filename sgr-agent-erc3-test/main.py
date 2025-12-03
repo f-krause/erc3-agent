@@ -19,7 +19,7 @@ MODEL_ID = "gpt-4.1"
 res = core.start_session(
     benchmark="erc3-test",
     workspace="my",
-    name=f"NextStep SGR ({MODEL_ID}) from ERC3 Samples +prompt-gen",
+    name=f"NextStep SGR ({MODEL_ID}) from ERC3 Samples +pipelined",
     architecture="NextStep SGR Agent with OpenAI")
 
 status = core.session_status(res.session_id)
