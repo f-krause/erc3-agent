@@ -34,7 +34,7 @@ class MyLLM:
             completion=resp.choices[0].message.content,
             prompt_tokens=resp.usage.prompt_tokens,
             completion_tokens=resp.usage.completion_tokens,
-            cached_prompt_tokens=resp.usage.prompt_tokens_details.cached_prompt_tokens,
+            cached_prompt_tokens=resp.usage.prompt_tokens_details.cached_tokens,
         )
 
         return resp.choices[0].message.parsed
