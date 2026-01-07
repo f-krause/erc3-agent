@@ -3,9 +3,12 @@ from typing import Annotated, List, Union, Literal
 from annotated_types import MaxLen, MinLen
 from pydantic import BaseModel, Field
 from erc3 import erc3 as dev, ApiException, TaskInfo, ERC3
-from openai import OpenAI
+from google import genai
+from google.genai import types
+from dotenv import load_dotenv
 
-client = OpenAI()
+load_dotenv()
+client = genai.Client()
 
 class NextStep(BaseModel):
     current_state: str
@@ -45,7 +48,6 @@ CLI_BLUE = "\x1B[34m"
 CLI_CLR = "\x1B[0m"
 
 def run_agent(model: str, api: ERC3, task: TaskInfo):
-
     store_api = api.get_erc_client(task)
     about = store_api.who_am_i()
 
@@ -65,8 +67,8 @@ When task is done or can't be done - Req_ProvideAgentResponse.
         usr = store_api.get_employee(about.current_user)
         system_prompt += f"\n{usr.model_dump_json()}"
 
-    # log will contain conversation context for the agent within task
-    log = [
+    # prompt_log will contain conversation context for the agent within task
+    prompt_log = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": task.task_text},
     ]
@@ -78,31 +80,35 @@ When task is done or can't be done - Req_ProvideAgentResponse.
 
         started = time.time()
 
-        resp = client.beta.chat.completions.parse(
+        resp = client.models.generate_content(
             model=model,
-            response_format=NextStep,
-            messages=log,
-            max_completion_tokens=16384,
+            contents=str(prompt_log),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=NextStep,
+                temperature=0,
+            ),
         )
 
+        usage = resp.usage_metadata
         api.log_llm(
             task_id=task.task_id,
             model=model, # should match model slug from OpenRouter
             duration_sec=time.time() - started,
-            completion=resp.choices[0].message.content,
-            prompt_tokens=resp.usage.prompt_tokens,
-            completion_tokens=resp.usage.completion_tokens,
-            cached_prompt_tokens=resp.usage.prompt_tokens_details.cached_tokens,
+            completion=resp.text,
+            prompt_tokens=usage.prompt_token_count,
+            completion_tokens=usage.candidates_token_count,
+            cached_prompt_tokens=usage.cached_content_token_count or 0,
         )
 
-        job = resp.choices[0].message.parsed
+        job = NextStep.model_validate_json(resp.text)
 
           # print next sep for debugging
         print(job.plan_remaining_steps_brief[0], f"\n  {job.function}")
 
         # Let's add tool request to conversation history as if OpenAI asked for it.
         # a shorter way would be to just append `job.model_dump_json()` entirely
-        log.append({
+        prompt_log.append({
             "role": "assistant",
             "content": job.plan_remaining_steps_brief[0],
             "tool_calls": [{
@@ -135,4 +141,4 @@ When task is done or can't be done - Req_ProvideAgentResponse.
 
         # and now we add results back to the convesation history, so that agent
         # we'll be able to act on the results in the next reasoning step.
-        log.append({"role": "tool", "content": txt, "tool_call_id": step})
+        prompt_log.append({"role": "tool", "content": txt, "tool_call_id": step})
