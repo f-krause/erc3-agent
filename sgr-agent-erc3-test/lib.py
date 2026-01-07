@@ -2,13 +2,15 @@ import time
 from typing import List, Type, TypeVar
 
 from erc3 import ERC3, TaskInfo
-from openai import OpenAI
+from google import genai
+from google.genai import types
 from pydantic import BaseModel
 
 T = TypeVar('T', bound=BaseModel)
 
+
 class MyLLM:
-    client: OpenAI
+    client: genai.Client
     api: ERC3
     task: TaskInfo
     model: str
@@ -19,22 +21,30 @@ class MyLLM:
         self.model = model
         self.task = task
         self.max_tokens = max_tokens
-        self.client = OpenAI()
+        self.client = genai.Client()
 
-
-    def query(self, messages: List, response_format: Type[T], model: str = None) -> T:
-
+    def query(self, prompt: str, response_format: Type[T], model: str = None) -> T:
         started = time.time()
-        resp = self.client.beta.chat.completions.parse(messages=messages, model=model or self.model, response_format=response_format, max_completion_tokens=self.max_tokens)
 
+        resp = self.client.models.generate_content(
+            model=model or self.model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=response_format,
+                temperature=0,
+            ),
+        )
+
+        usage = resp.usage_metadata
         self.api.log_llm(
             task_id=self.task.task_id,
             model=model or self.model,
             duration_sec=time.time() - started,
-            completion=resp.choices[0].message.content,
-            prompt_tokens=resp.usage.prompt_tokens,
-            completion_tokens=resp.usage.completion_tokens,
-            cached_prompt_tokens=resp.usage.prompt_tokens_details.cached_tokens,
+            completion=resp.text,
+            prompt_tokens=usage.prompt_token_count,
+            completion_tokens=usage.candidates_token_count,
+            cached_prompt_tokens=usage.cached_content_token_count or 0,
         )
 
-        return resp.choices[0].message.parsed
+        return response_format.model_validate_json(resp.text)

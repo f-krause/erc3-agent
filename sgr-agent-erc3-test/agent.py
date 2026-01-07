@@ -143,7 +143,7 @@ def distill_rules(api: Erc3Client, llm: MyLLM, about: dev.Resp_WhoAmI) -> str:
         company_execs: List[str]
         rules: List[Rule]
 
-    if  not loc.exists():
+    if not loc.exists():
         print("New context discovered. Distilling rules once")
         schema = json.dumps(NextStep.model_json_schema())
         prompt = f"""
